@@ -1,0 +1,263 @@
+import streamlit as st
+import google.generativeai as genai
+from PIL import Image
+from gtts import gTTS
+from fpdf import FPDF
+import pandas as pd
+import sqlite3
+import tempfile
+import time
+from datetime import datetime
+
+# ==========================================
+# 1. CONFIGURATION & AESTHETIC THEME
+# ==========================================
+st.set_page_config(
+    page_title="InsightLens V600",
+    layout="wide",
+    page_icon="✨",
+    initial_sidebar_state="expanded"
+)
+
+# Custom Aesthetic CSS (Glassmorphism + Neon Accents)
+st.markdown("""
+    <style>
+    /* Main Background - Deep Space Blue/Black */
+    .stApp {
+        background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+        color: #E0E0E0;
+        font-family: 'Helvetica Neue', sans-serif;
+    }
+    
+    /* Glass Cards */
+    .glass-card {
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(10px);
+        border-radius: 15px;
+        padding: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        margin-bottom: 20px;
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Buttons */
+    .stButton>button {
+        background: linear-gradient(90deg, #00d2ff 0%, #3a7bd5 100%);
+        border: none;
+        color: white;
+        border-radius: 8px;
+        padding: 10px 24px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+        width: 100%;
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 20px rgba(0, 210, 255, 0.3);
+    }
+
+    /* Inputs */
+    .stTextInput>div>div>input, .stTextArea>div>div>textarea {
+        background-color: rgba(0, 0, 0, 0.3) !important;
+        color: white !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        border-radius: 8px;
+    }
+    
+    /* Headers */
+    h1, h2, h3 {
+        background: -webkit-linear-gradient(#eee, #aaa);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: rgba(0, 0, 0, 0.2);
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# ==========================================
+# 2. DATABASE & UTILS
+# ==========================================
+class DatabaseManager:
+    def __init__(self, db_name="insightlens_v600.db"):
+        self.conn = sqlite3.connect(db_name, check_same_thread=False)
+        self.create_tables()
+
+    def create_tables(self):
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                type TEXT,
+                query TEXT,
+                response TEXT
+            )
+        ''')
+        self.conn.commit()
+
+    def log(self, type, query, response):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO history (timestamp, type, query, response) VALUES (?, ?, ?, ?)",
+                       (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), type, query, response))
+        self.conn.commit()
+
+    def get_logs(self):
+        return pd.read_sql_query("SELECT * FROM history ORDER BY id DESC LIMIT 50", self.conn)
+
+db = DatabaseManager()
+
+def get_audio_file(text):
+    try:
+        tts = gTTS(text=text[:300], lang='en')
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+            tts.save(fp.name)
+            return fp.name
+    except: return None
+
+# ==========================================
+# 3. SIDEBAR CONFIG
+# ==========================================
+with st.sidebar:
+    st.title("✨ InsightLens")
+    st.caption("Visual & Semantic Intelligence")
+    
+    api_key = st.text_input("Gemini API Key", type="password")
+    
+    st.markdown("---")
+    st.subheader("⚙️ Preferences")
+    model_choice = st.selectbox("AI Model", ["models/gemini-1.5-flash", "models/gemini-1.5-pro"])
+    creativity = st.slider("Creativity", 0.0, 1.0, 0.5)
+    
+    st.markdown("---")
+    if st.checkbox("Show History Logs"):
+        st.dataframe(db.get_logs(), use_container_width=True)
+
+# ==========================================
+# 4. MAIN LAYOUT (DUAL COLUMNS)
+# ==========================================
+st.markdown("<h1 style='text-align: center; margin-bottom: 40px;'>InsightLens V600</h1>", unsafe_allow_html=True)
+
+col_dict, col_vision = st.columns([1, 1.2], gap="large")
+
+# --- LEFT COLUMN: SMART DICTIONARY ---
+with col_dict:
+    st.markdown("""
+    <div class="glass-card">
+        <h3>📖 Smart Dictionary</h3>
+        <p style='font-size: 0.9em; opacity: 0.7;'>Instant definitions, etymology, and usage examples.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    word_query = st.text_input("Enter a word or phrase...", placeholder="e.g., 'Serendipity' or 'Quantum Computing'")
+    
+    if st.button("🔍 Define Word"):
+        if not api_key:
+            st.error("Please enter API Key in sidebar.")
+        elif not word_query:
+            st.warning("Enter a word first.")
+        else:
+            with st.spinner("Searching lexicon..."):
+                try:
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel("models/gemini-1.5-flash")
+                    
+                    prompt = f"""
+                    Define the word/phrase: '{word_query}'.
+                    Format the response nicely in Markdown:
+                    1. **Definition**: Simple explanation.
+                    2. **Etymology**: Origin of the word.
+                    3. **Example Sentence**: Use it in a sentence.
+                    4. **Synonyms**: 3 similar words.
+                    """
+                    
+                    response = model.generate_content(prompt)
+                    res_text = response.text
+                    
+                    # Log & Display
+                    db.log("Dictionary", word_query, res_text)
+                    
+                    st.markdown(f"""
+                    <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; border-left: 4px solid #00d2ff;">
+                        {res_text}
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Audio for word
+                    audio = get_audio_file(res_text)
+                    if audio: st.audio(audio)
+                    
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+# --- RIGHT COLUMN: VISUAL ANALYSIS ---
+with col_vision:
+    st.markdown("""
+    <div class="glass-card">
+        <h3>👁️ Visual Analysis</h3>
+        <p style='font-size: 0.9em; opacity: 0.7;'>Upload images or use camera to analyze the world.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["📂 Upload File", "📸 Live Camera"])
+    
+    final_img = None
+    
+    with tab1:
+        up_file = st.file_uploader("Drop image here...", type=['jpg','png','jpeg'])
+        if up_file: final_img = Image.open(up_file)
+        
+    with tab2:
+        cam_file = st.camera_input("Take photo")
+        if cam_file: final_img = Image.open(cam_file)
+
+    if final_img:
+        st.image(final_img, caption="Target Acquired", use_container_width=True)
+        
+        mode = st.selectbox("Analysis Mode", ["General Description", "Text Extraction (OCR)", "Problem Solver", "Object Detection"])
+        custom_prompt = st.text_input("Specific Question (Optional)", placeholder="e.g., What is the brand of the shoes?")
+        
+        if st.button("🚀 Analyze Image"):
+            if not api_key:
+                st.error("API Key Missing")
+            else:
+                with st.spinner("Processing visual data..."):
+                    try:
+                        genai.configure(api_key=api_key)
+                        model = genai.GenerativeModel(model_choice, generation_config={"temperature": creativity})
+                        
+                        base_prompts = {
+                            "General Description": "Describe this image in detail.",
+                            "Text Extraction (OCR)": "Extract all visible text from this image and format it nicely.",
+                            "Problem Solver": "Solve the math problem or logic puzzle shown in the image step-by-step.",
+                            "Object Detection": "List the main objects in this image and their approximate location."
+                        }
+                        
+                        final_prompt = f"{base_prompts[mode]}. {custom_prompt}"
+                        
+                        response = model.generate_content([final_prompt, final_img])
+                        res_text = response.text
+                        
+                        db.log("Vision", mode, res_text)
+                        
+                        st.success("Analysis Complete")
+                        st.markdown(res_text)
+                        
+                        # Export Tools
+                        col_ex1, col_ex2 = st.columns(2)
+                        with col_ex1:
+                            st.download_button("📥 Save Text", res_text, "analysis.txt")
+                        with col_ex2:
+                            audio = get_audio_file(res_text)
+                            if audio: st.audio(audio)
+                            
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+# Footer
+st.markdown("---")
+st.markdown("<p style='text-align: center; color: #666;'>Built for Gemini Hack Days • RGUKT RK Valley</p>", unsafe_allow_html=True)
