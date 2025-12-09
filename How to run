@@ -1,0 +1,7 @@
+How to run??
+
+
+python3 -m streamlit run "/Users/vansh/Desktop/PY PRAC/DEvpost HAckathon/InsightLensapp.py" 
+
+it wouldn't be able to run directly you need to use this while running the code
+
